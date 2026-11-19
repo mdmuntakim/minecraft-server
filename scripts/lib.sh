@@ -67,8 +67,12 @@ download_verified() {
 # Replaces a key in a properties file, appending it when it is missing.
 set_property() {
     local file="$1" key="$2" value="$3"
+    local escaped
+    # The replacement is not literal in sed: escape backslash, & and the
+    # delimiter so MOTDs with a "|" or a colour code survive.
+    escaped="$(printf '%s' "$value" | sed -e 's/[\\&|]/\\&/g')"
     if grep -q "^${key}=" "$file"; then
-        sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+        sed -i "s|^${key}=.*|${key}=${escaped}|" "$file"
     else
         printf '%s=%s\n' "$key" "$value" >>"$file"
     fi

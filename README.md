@@ -33,6 +33,51 @@ The first start creates the world, downloads the Paper jar (55 MB) and verifies
 its SHA-256. `server/eula.txt` is set to `eula=true`; starting the server means
 accepting the [Minecraft EULA](https://aka.ms/MinecraftEULA).
 
+## Run a public server from GitHub Actions
+
+The `server` workflow has a **Run workflow** button: open the **Actions** tab,
+pick **server** on the left, then **Run workflow**. One run boots Paper,
+installs the newest MobHead release from
+[mdmuntakim/mobhead](https://github.com/mdmuntakim/mobhead) and opens a
+bore.pub tunnel, so players can join from anywhere while the run is alive.
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `duration_minutes` | `300` | minutes online, 1-330 |
+| `public_port` | empty | fixed bore.pub port (e.g. `25999`), empty = random |
+| `memory` | `2G` | Java heap |
+| `paper_version` | `26.3` | Paper version |
+| `mobhead` | `true` | install the latest MobHead release |
+| `online_mode` | `true` | require a Minecraft account |
+| `save_world` | `true` | upload the world as an artifact when the run ends |
+
+The address appears in the run summary and in the log as soon as the tunnel
+is up:
+
+```
+Minecraft is public:  bore.pub:25999
+```
+
+Enter that with **Direct Connection** in Minecraft. Cancel the run to stop the
+server; the logs and (optionally) the world are kept as run artifacts for
+seven days. The MobHead version, tag and SHA-256 are printed during the run,
+so the jar is always the latest published release and never a stale copy in
+this repository.
+
+A GitHub-hosted runner has no inbound public IP, so the game address is a
+tunnel endpoint rather than the runner's own address. With `public_port` set
+the endpoint stays the same between runs as long as that bore.pub port is
+free; otherwise the run falls back to a random port and says so. For a
+permanent named address, pass `--to` to a self-hosted
+[bore](https://github.com/ekzhang/bore) server or use a
+[playit.gg](https://playit.gg) agent.
+
+The same run is available locally:
+
+```bash
+DURATION_MINUTES=120 PUBLIC_PORT=25999 ./scripts/run-server.sh
+```
+
 ## Test it
 
 ```bash
@@ -61,7 +106,7 @@ Useful switches:
 
 ### Test matrix
 
-Last run on Linux x86_64, Temurin 25.0.5, Paper 26.3 build 256, MobHead 26.3 r2:
+Last run on Linux x86_64, Temurin 25.0.5, Paper 26.3 build 256, MobHead 26.3 r3:
 
 | Check | Result |
 | --- | --- |
@@ -117,6 +162,7 @@ To package the scripts and default configuration without a runtime:
 ```
 scripts/get-paper.sh       resolve the latest Paper build, verify SHA-256
 scripts/start.sh           start the server, download on first run
+scripts/run-server.sh      timed public run used by the server workflow
 scripts/tunnel.sh          public bore tunnel (pinned, checksum verified)
 scripts/install-mobhead.sh install the published MobHead jar
 scripts/ping.py            Minecraft status protocol client

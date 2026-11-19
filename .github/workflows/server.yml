@@ -1,0 +1,102 @@
+name: server
+
+# Start a public PaperMC server for a few hours from the Actions tab:
+# Actions -> server -> Run workflow.  The game address is printed in the job
+# summary and in the logs as soon as the tunnel is up.
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: 'Minutes the server stays online (1-330)'
+        required: true
+        default: '300'
+      public_port:
+        description: 'Fixed bore.pub port, e.g. 25999 (empty = random)'
+        required: false
+        default: ''
+      memory:
+        description: 'Java heap for the server'
+        required: true
+        default: '2G'
+      paper_version:
+        description: 'Paper version'
+        required: true
+        default: '26.3'
+      mobhead:
+        description: 'Install the latest MobHead release'
+        type: boolean
+        default: true
+      online_mode:
+        description: 'Require a Minecraft account (online-mode)'
+        type: boolean
+        default: true
+      save_world:
+        description: 'Upload the world as a run artifact'
+        type: boolean
+        default: true
+
+run-name: Minecraft server (${{ inputs.duration_minutes }} min)
+
+permissions:
+  contents: read
+
+# One public server per repository; a second run waits instead of stealing
+# the port and the world.
+concurrency:
+  group: minecraft-server
+  cancel-in-progress: false
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    # GitHub cancels a job at 6 hours.  The script stops earlier (max 330
+    # minutes) so the world save and the artifact upload still finish.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Cache the tunnel client
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: minecraft-${{ runner.os }}-${{ inputs.paper_version }}-v1
+          restore-keys: minecraft-${{ runner.os }}-
+
+      - name: Run the public server
+        env:
+          DURATION_MINUTES: ${{ inputs.duration_minutes }}
+          PUBLIC_PORT: ${{ inputs.public_port }}
+          MEMORY: ${{ inputs.memory }}
+          PAPER_VERSION: ${{ inputs.paper_version }}
+          MOBHEAD: ${{ inputs.mobhead && '1' || '0' }}
+          ONLINE_MODE: ${{ inputs.online_mode && 'true' || 'false' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/run-server.sh
+
+      - name: Upload server logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minecraft-logs-${{ github.run_number }}
+          path: |
+            run/
+            server/logs/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload the world
+        if: always() && inputs.save_world
+        uses: actions/upload-artifact@v4
+        with:
+          name: minecraft-world-${{ github.run_number }}
+          path: |
+            server/world/
+            server/world_nether/
+            server/world_the_end/
+          if-no-files-found: warn
+          retention-days: 7
