@@ -27,7 +27,9 @@ major="$("$JAVA_BIN" -version 2>&1 | awk -F'"' '/version/ {print $2}' | cut -d. 
 
 PORT="$(free_port "${SERVER_PORT:-25565}")"
 RCON_PORT="$(free_port 25575)"
-[ "$RCON_PORT" = "$PORT" ] && RCON_PORT="$(free_port 25576)"
+while [ "$RCON_PORT" = "$PORT" ]; do
+    RCON_PORT="$(free_port 25575)"
+done
 RCON_PASS="rcon-$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
 WORK="${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/minecraft-server-test.XXXXXX")}"
 CONSOLE="$WORK/console.log"
@@ -46,6 +48,7 @@ cleanup() {
     trap - EXIT
     if [ -n "$TUNNEL_PID" ] && kill -0 "$TUNNEL_PID" 2>/dev/null; then
         kill "$TUNNEL_PID" 2>/dev/null || true
+        wait "$TUNNEL_PID" 2>/dev/null || true
     fi
     if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
         log "stopping the test server"
@@ -55,6 +58,7 @@ cleanup() {
             sleep 1
         done
         kill -KILL "$SERVER_PID" 2>/dev/null || true
+        wait "$SERVER_PID" 2>/dev/null || true
     fi
     if [ "$code" -ne 0 ] && [ -f "$CONSOLE" ]; then
         printf '\n--- console tail ---\n' >&2
@@ -94,11 +98,10 @@ set_property "$WORK/server.properties" rcon.port "$RCON_PORT"
 set_property "$WORK/server.properties" rcon.password "$RCON_PASS"
 
 log "starting Paper $PAPER_VERSION on 127.0.0.1:$PORT (RCON $RCON_PORT)"
-(
-    cd "$WORK"
-    SERVER_DIR="$WORK" SERVER_PORT="$PORT" MEMORY="${MEMORY:-1G}" \
-        "$ROOT/scripts/start.sh" >>"$CONSOLE" 2>&1
-) &
+# No subshell here: start.sh execs Java, so $! is the server process and the
+# cleanup trap can stop it.  A subshell would leave an orphaned Java process.
+SERVER_DIR="$WORK" SERVER_PORT="$PORT" MEMORY="${MEMORY:-1G}" \
+    "$ROOT/scripts/start.sh" >>"$CONSOLE" 2>&1 &
 SERVER_PID=$!
 
 STARTED_AT="$(date +%s)"
@@ -144,9 +147,8 @@ RESULT_PING=PASS
 if [ "$SKIP_TUNNEL" != 1 ]; then
     TUNNEL_LOG="$WORK/tunnel.log"
     log "starting the public tunnel for port $PORT"
-    (
-        "$ROOT/scripts/tunnel.sh" --port "$PORT" >"$TUNNEL_LOG" 2>&1
-    ) &
+    # tunnel.sh execs bore, so $! is the tunnel process that cleanup stops.
+    "$ROOT/scripts/tunnel.sh" --port "$PORT" >"$TUNNEL_LOG" 2>&1 &
     TUNNEL_PID=$!
 
     for _ in $(seq 1 120); do

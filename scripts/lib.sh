@@ -75,15 +75,19 @@ set_property() {
 }
 
 # A free TCP port, used by the test suite so it never collides with a real
-# server.  Falls back to the requested port when Python is unavailable.
+# server.  Tries the preferred port, then nearby ports, then a random high
+# port.
 free_port() {
     local preferred="${1:-25565}"
     python3 - "$preferred" <<'PY'
+import random
 import socket
 import sys
 
 preferred = int(sys.argv[1])
-for port in [preferred] + list(range(25565, 25600)) + [0]:
+ports = [preferred] + list(range(preferred, preferred + 40)) \
+    + random.sample(range(30000, 40000), 200) + [0]
+for port in ports:
     try:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", port))
