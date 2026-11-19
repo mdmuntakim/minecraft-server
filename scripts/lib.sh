@@ -78,6 +78,23 @@ set_property() {
     fi
 }
 
+# Splits a requested run into one session for this job and the remaining
+# minutes for a continuation run.  GitHub cancels a hosted job at six hours,
+# so every session stays below that limit and the world is carried over.
+#
+#   plan_session <total> <already_served> <session_cap>  ->  "<session> <left>"
+plan_session() {
+    local total="$1" elapsed="$2" cap="$3"
+    local left=$((total - elapsed))
+    local session
+    if [ "$left" -lt "$cap" ]; then
+        session="$left"
+    else
+        session="$cap"
+    fi
+    printf '%s %s\n' "$session" "$((left - session))"
+}
+
 # A free TCP port, used by the test suite so it never collides with a real
 # server.  Tries the preferred port, then nearby ports, then a random high
 # port.

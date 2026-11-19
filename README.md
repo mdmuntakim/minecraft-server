@@ -43,19 +43,30 @@ bore.pub tunnel, so players can join from anywhere while the run is alive.
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `duration_minutes` | `300` | minutes online, 1-330 |
-| `public_port` | empty | fixed bore.pub port (e.g. `25999`), empty = random |
+| `duration_minutes` | `360` | total minutes online, 1-1440; more than 330 is split into sessions |
+| `public_port` | `25565` | fixed bore.pub port, empty = random |
 | `memory` | `2G` | Java heap |
 | `paper_version` | `26.3` | Paper version |
 | `mobhead` | `true` | install the latest MobHead release |
 | `online_mode` | `true` | require a Minecraft account |
 | `save_world` | `true` | upload the world as an artifact when the run ends |
+| `session_minutes` | `320` | longest single job (internal, 1-330) |
+| `elapsed_minutes` | `0` | minutes already served (internal) |
+| `previous_run` | empty | run id whose world is restored (internal) |
+
+GitHub ends a hosted job after six hours, so a request longer than one session
+is split automatically. At the end of each session the server saves the world,
+the workflow uploads it as `minecraft-world-<run>`, then it dispatches the next
+session with `previous_run` set. The next job restores that world and asks
+bore.pub for the same port again, so a six hour request is served by a 320
+minute session and a 40 minute continuation. The address is the same before and
+after the handover; there is a short gap while the next job boots.
 
 The address appears in the run summary and in the log as soon as the tunnel
 is up:
 
 ```
-Minecraft is public:  bore.pub:25999
+Minecraft is public:  bore.pub:25565
 ```
 
 Enter that with **Direct Connection** in Minecraft. Cancel the run to stop the
@@ -75,13 +86,14 @@ permanent named address, pass `--to` to a self-hosted
 The same run is available locally:
 
 ```bash
-DURATION_MINUTES=120 PUBLIC_PORT=25999 ./scripts/run-server.sh
+DURATION_MINUTES=120 PUBLIC_PORT=25565 ./scripts/run-server.sh
 ```
 
 ## Test it
 
 ```bash
-./scripts/test-server.sh
+./scripts/test-continuation.sh   # session split and continuation request
+./scripts/test-server.sh         # boot, ping, MobHead, public tunnel
 ```
 
 The test downloads Paper, boots it on a free port, and then checks:
@@ -110,6 +122,7 @@ Last run on Linux x86_64, Temurin 25.0.5, Paper 26.3 build 256, MobHead 26.3 r3:
 
 | Check | Result |
 | --- | --- |
+| Continuation split and workflow request | PASS |
 | Paper boot | PASS |
 | Status protocol (`ping.py`) | PASS |
 | MobHead `/mobhead selftest` (RCON) | PASS |
@@ -123,6 +136,9 @@ reads these environment variables:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SERVER_DIR` | `server/` | World, jar and configuration directory |
+| `DURATION_MINUTES` | `360` | total minutes to stay online (1-1440) |
+| `SESSION_MINUTES` | `320` | longest single job on GitHub; longer runs hand over to a continuation |
+| `PUBLIC_PORT` | empty | fixed bore.pub port to request |
 | `MEMORY` | `2G` | Java heap (`-Xms` and `-Xmx`) |
 | `PAPER_VERSION` | `26.3` | Paper version |
 | `PAPER_BUILD` | `latest` | `latest` or a build number |

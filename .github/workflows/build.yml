@@ -21,6 +21,9 @@ jobs:
           distribution: temurin
           java-version: '25'
 
+      - name: Continuation checks
+        run: ./scripts/test-continuation.sh
+
       - name: End-to-end server test
         run: ./scripts/test-server.sh
         env:

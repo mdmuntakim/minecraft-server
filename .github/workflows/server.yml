@@ -1,19 +1,24 @@
 name: server
 
-# Start a public PaperMC server for a few hours from the Actions tab:
+# Start a public PaperMC server from the Actions tab:
 # Actions -> server -> Run workflow.  The game address is printed in the job
 # summary and in the logs as soon as the tunnel is up.
+#
+# A run may be longer than six hours: the script stops each job before the
+# GitHub limit, saves the world as an artifact and dispatches the next session
+# with previous_run set.  The next job restores the world and reopens the same
+# bore.pub port, so a 360 minute request is two sessions of 320 + 40 minutes.
 on:
   workflow_dispatch:
     inputs:
       duration_minutes:
-        description: 'Minutes the server stays online (1-330)'
+        description: 'Total minutes online, 1-1440 (over 330 is split into sessions)'
         required: true
-        default: '300'
+        default: '360'
       public_port:
-        description: 'Fixed bore.pub port, e.g. 25999 (empty = random)'
+        description: 'Fixed bore.pub port, e.g. 25565 (empty = random)'
         required: false
-        default: ''
+        default: '25565'
       memory:
         description: 'Java heap for the server'
         required: true
@@ -34,14 +39,29 @@ on:
         description: 'Upload the world as a run artifact'
         type: boolean
         default: true
+      session_minutes:
+        description: 'Longest single job (internal, 1-330)'
+        required: true
+        default: '320'
+      elapsed_minutes:
+        description: 'Minutes already served (internal, set by the previous session)'
+        required: true
+        default: '0'
+      previous_run:
+        description: 'Run id whose world artifact is restored (internal, set by the previous session)'
+        required: false
+        default: ''
 
 run-name: Minecraft server (${{ inputs.duration_minutes }} min)
 
 permissions:
   contents: read
+  # The last session of a long run dispatches the next one.
+  actions: write
 
 # One public server per repository; a second run waits instead of stealing
-# the port and the world.
+# the port and the world.  A continuation session is queued behind the running
+# one and starts as soon as the world artifact is uploaded.
 concurrency:
   group: minecraft-server
   cancel-in-progress: false
@@ -49,11 +69,17 @@ concurrency:
 jobs:
   server:
     runs-on: ubuntu-latest
-    # GitHub cancels a job at 6 hours.  The script stops earlier (max 330
-    # minutes) so the world save and the artifact upload still finish.
+    # GitHub cancels a job at 6 hours.  A session stops earlier (320 minutes
+    # by default) so the world save and the artifact upload still finish.
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore the world from the previous session
+        if: inputs.previous_run != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/restore-world.sh "${{ inputs.previous_run }}"
 
       - uses: actions/setup-java@v4
         with:
@@ -70,11 +96,14 @@ jobs:
       - name: Run the public server
         env:
           DURATION_MINUTES: ${{ inputs.duration_minutes }}
+          ELAPSED_MINUTES: ${{ inputs.elapsed_minutes }}
+          SESSION_MINUTES: ${{ inputs.session_minutes }}
           PUBLIC_PORT: ${{ inputs.public_port }}
           MEMORY: ${{ inputs.memory }}
           PAPER_VERSION: ${{ inputs.paper_version }}
           MOBHEAD: ${{ inputs.mobhead && '1' || '0' }}
           ONLINE_MODE: ${{ inputs.online_mode && 'true' || 'false' }}
+          SAVE_WORLD: ${{ inputs.save_world && '1' || '0' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/run-server.sh
 

@@ -5,12 +5,21 @@
 # GitHub Actions workflow runs.
 #
 #   DURATION_MINUTES=120 ./scripts/run-server.sh
-#   DURATION_MINUTES=120 PUBLIC_PORT=25999 ./scripts/run-server.sh
+#   DURATION_MINUTES=120 PUBLIC_PORT=25565 ./scripts/run-server.sh
 #   DURATION_MINUTES=30 ./scripts/run-server.sh --no-tunnel
 #
+# A request longer than one session (six hours is the GitHub job limit) is
+# split automatically: the session saves the world, the world is uploaded as
+# an artifact and the workflow is dispatched again with that artifact.  The
+# next session restores the world and keeps the same bore.pub port.
+#
 # Environment:
-#   DURATION_MINUTES  how long to keep the server up (default 300, max 330)
+#   DURATION_MINUTES  total minutes to keep the server up (default 360, max 1440)
+#   ELAPSED_MINUTES   minutes already served by earlier sessions (default 0)
+#   SESSION_MINUTES   longest single job (default 320 on GitHub, no split
+#                     locally; a GitHub session must stay at or below 330)
 #   PUBLIC_PORT       fixed public port to request from bore.pub (default any)
+#   SAVE_WORLD        1 upload the world for the continuation run (default 1)
 #   MEMORY            Java heap (default 2G)
 #   SERVER_PORT       local port (default 25565, a free port is used if taken)
 #   PAPER_VERSION     Paper version (default 26.3)
@@ -26,11 +35,21 @@ cd "$(dirname "$0")"
 # shellcheck source=lib.sh
 source ./lib.sh
 
-DURATION_MINUTES="${DURATION_MINUTES:-300}"
+DURATION_MINUTES="${DURATION_MINUTES:-360}"
+ELAPSED_MINUTES="${ELAPSED_MINUTES:-0}"
+if [ -z "${SESSION_MINUTES:-}" ]; then
+    # A local run is not bound to the six hour job limit.
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+        SESSION_MINUTES=320
+    else
+        SESSION_MINUTES=1440
+    fi
+fi
 PUBLIC_PORT="${PUBLIC_PORT:-}"
 MEMORY="${MEMORY:-2G}"
 MOBHEAD="${MOBHEAD:-1}"
 ONLINE_MODE="${ONLINE_MODE:-true}"
+SAVE_WORLD="${SAVE_WORLD:-1}"
 MAX_PLAYERS="${MAX_PLAYERS:-20}"
 MOTD="${MOTD:-PaperMC $PAPER_VERSION \u00a77| \u00a7aPublic server}"
 TUNNEL="${TUNNEL:-1}"
@@ -40,6 +59,8 @@ RUN_DIR="${RUN_DIR:-$ROOT/run}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --duration)    DURATION_MINUTES="${2:?--duration needs a value}"; shift 2 ;;
+        --elapsed)     ELAPSED_MINUTES="${2:?--elapsed needs a value}"; shift 2 ;;
+        --session)     SESSION_MINUTES="${2:?--session needs a value}"; shift 2 ;;
         --public-port) PUBLIC_PORT="${2:?--public-port needs a value}"; shift 2 ;;
         --memory)      MEMORY="${2:?--memory needs a value}"; shift 2 ;;
         --no-tunnel)   TUNNEL=0; shift ;;
@@ -54,10 +75,30 @@ done
 case "$DURATION_MINUTES" in
     ''|*[!0-9]*) die "duration must be a whole number of minutes" ;;
 esac
+case "$ELAPSED_MINUTES" in
+    ''|*[!0-9]*) die "elapsed must be a whole number of minutes" ;;
+esac
+case "$SESSION_MINUTES" in
+    ''|*[!0-9]*) die "session must be a whole number of minutes" ;;
+esac
 [ "$DURATION_MINUTES" -ge 1 ] || die "duration must be at least 1 minute"
-# GitHub kills a hosted job after 6 hours; stay below it so the shutdown and
-# log upload still run.
-[ "$DURATION_MINUTES" -le 330 ] || die "duration must be 330 minutes or less"
+[ "$DURATION_MINUTES" -le 1440 ] || die "duration must be 1440 minutes or less"
+[ "$ELAPSED_MINUTES" -lt "$DURATION_MINUTES" ] \
+    || die "elapsed ($ELAPSED_MINUTES) must be smaller than the total duration ($DURATION_MINUTES)"
+# GitHub cancels a hosted job after 6 hours; a session there stays well below
+# it so the world save and the artifact upload still finish.  Locally there is
+# no such limit.
+[ "$SESSION_MINUTES" -ge 1 ] || die "a session must be at least 1 minute"
+if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    [ "$SESSION_MINUTES" -le 330 ] || die "a GitHub session must be 330 minutes or less"
+fi
+
+read -r SESSION_LENGTH REMAINING_AFTER <<<"$(plan_session "$DURATION_MINUTES" "$ELAPSED_MINUTES" "$SESSION_MINUTES")"
+SESSIONS=$(( (DURATION_MINUTES - ELAPSED_MINUTES + SESSION_LENGTH - 1) / SESSION_LENGTH ))
+SESSION_NUMBER=$(( ELAPSED_MINUTES / SESSION_LENGTH + 1 ))
+if [ "$REMAINING_AFTER" -gt 0 ] && [ "$SAVE_WORLD" != 1 ]; then
+    die "a run longer than one session needs SAVE_WORLD=1 so the next session can restore the world"
+fi
 
 need "$JAVA_BIN"
 need curl
@@ -82,9 +123,11 @@ ADDRESS_HOST=""
 ADDRESS_PORT=""
 STARTED_AT="$(date +%s)"
 SUMMARY_WRITTEN=0
+CONTINUING=0
 
 log "== Minecraft server run =="
-log "duration:   ${DURATION_MINUTES} minutes"
+log "duration:   ${DURATION_MINUTES} minutes total ($ELAPSED_MINUTES already served)"
+log "session:    ${SESSION_LENGTH} minutes (${SESSION_NUMBER} of ${SESSIONS})$([ "$REMAINING_AFTER" -gt 0 ] && echo ", continuation follows")"
 log "paper:      $PAPER_VERSION"
 log "mobhead:    $([ "$MOBHEAD" = 1 ] && echo latest || echo disabled)"
 log "run dir:    $RUN_DIR"
@@ -101,13 +144,21 @@ write_summary() {
         printf '| Paper | %s |\n' "$PAPER_INFO"
         printf '| MobHead | %s |\n' "$MOBHEAD_INFO"
         printf '| Started | %s UTC |\n' "$(date -u -d "@$STARTED_AT" '+%Y-%m-%d %H:%M')"
-        printf '| Runs until | %s UTC (about %s minutes) |\n' \
-            "$(date -u -d "@$((STARTED_AT + DURATION_MINUTES * 60))" '+%Y-%m-%d %H:%M')" \
-            "$DURATION_MINUTES"
+        printf '| Runs until | %s UTC (session %s of %s, about %s minutes) |\n' \
+            "$(date -u -d "@$((STARTED_AT + SESSION_LENGTH * 60))" '+%Y-%m-%d %H:%M')" \
+            "$SESSION_NUMBER" "$SESSIONS" "$SESSION_LENGTH"
+        printf '| Total run | %s minutes%s |\n' "$DURATION_MINUTES" \
+            "$([ "$REMAINING_AFTER" -gt 0 ] && echo ", split into ${SESSIONS} sessions")"
         printf '| Server log | `run/console.log` in the run artifacts |\n\n'
         printf 'Use **Direct Connection** in Minecraft and enter `%s`.\n\n' "$PUBLIC_ADDRESS"
-        printf 'The address works while this workflow run is alive. Cancel the run\n'
-        printf 'to stop the server; the world and logs are uploaded as an artifact.\n'
+        if [ "$REMAINING_AFTER" -gt 0 ]; then
+            printf 'This session saves the world and a continuation run restores it after\n'
+            printf 'a short restart, so the server stays online for the full %s minutes.\n' \
+                "$DURATION_MINUTES"
+        else
+            printf 'The address works while this workflow run is alive. Cancel the run\n'
+            printf 'to stop the server; the world and logs are uploaded as an artifact.\n'
+        fi
     } >>"$SUMMARY_FILE"
 }
 
@@ -135,12 +186,24 @@ cleanup() {
     stop_server
     stop_tunnel
     if [ "$SUMMARY_WRITTEN" = 1 ] && [ -n "$SUMMARY_FILE" ]; then
-        {
-            printf '\n### Server stopped\n\n'
-            printf 'Stopped at %s UTC after %s minutes. `run/console.log` and the\n' \
-                "$(date -u '+%Y-%m-%d %H:%M')" "$((($(date +%s) - STARTED_AT) / 60))"
-            printf 'world are in the run artifacts of this workflow run.\n'
-        } >>"$SUMMARY_FILE"
+        if [ "${CONTINUING:-0}" = 1 ]; then
+            {
+                printf '\n### Session handed over\n\n'
+                printf 'Session %s of %s ended at %s UTC after %s minutes. The world\n' \
+                    "$SESSION_NUMBER" "$SESSIONS" "$(date -u '+%Y-%m-%d %H:%M')" \
+                    "$((($(date +%s) - STARTED_AT) / 60))"
+                printf 'is uploaded and a continuation run (%s minutes left) restores it.\n' \
+                    "$REMAINING_AFTER"
+                printf 'The public address returns as soon as that run has booted.\n'
+            } >>"$SUMMARY_FILE"
+        else
+            {
+                printf '\n### Server stopped\n\n'
+                printf 'Stopped at %s UTC after %s minutes. `run/console.log` and the\n' \
+                    "$(date -u '+%Y-%m-%d %H:%M')" "$((($(date +%s) - STARTED_AT) / 60))"
+                printf 'world are in the run artifacts of this workflow run.\n'
+            } >>"$SUMMARY_FILE"
+        fi
     fi
     if [ "$code" -ne 0 ]; then
         printf '\n--- console tail ---\n' >&2
@@ -275,7 +338,7 @@ else
 fi
 
 # --- keep alive ------------------------------------------------------------
-DEADLINE=$((STARTED_AT + DURATION_MINUTES * 60))
+DEADLINE=$((STARTED_AT + SESSION_LENGTH * 60))
 LAST_STATUS=0
 TUNNEL_RESTARTS=0
 while :; do
@@ -289,7 +352,13 @@ while :; do
         [ "$TUNNEL_RESTARTS" -le 2 ] || die "the tunnel keeps stopping"
         warn "the tunnel stopped, reopening it ($TUNNEL_RESTARTS/2)"
         PUBLIC_ADDRESS=""
-        start_tunnel "" || die "could not reopen the tunnel"
+        if [ -n "$PUBLIC_PORT" ]; then
+            start_tunnel "$PUBLIC_PORT" || true
+        fi
+        if [ -z "$PUBLIC_ADDRESS" ]; then
+            stop_tunnel
+            start_tunnel "" || die "could not reopen the tunnel"
+        fi
         ADDRESS_HOST="${PUBLIC_ADDRESS%:*}"
         ADDRESS_PORT="${PUBLIC_ADDRESS##*:}"
         printf '%s\n' "$PUBLIC_ADDRESS" >"$ADDRESS_FILE"
@@ -297,11 +366,28 @@ while :; do
     fi
     if [ $((NOW - LAST_STATUS)) -ge 60 ]; then
         LAST_STATUS="$NOW"
-        printf '==> up %s/%s min' "$(( (NOW - STARTED_AT) / 60 ))" "$DURATION_MINUTES"
+        printf '==> session up %s/%s min' "$(( (NOW - STARTED_AT) / 60 ))" "$SESSION_LENGTH"
         [ -n "$PUBLIC_ADDRESS" ] && printf ', address %s' "$PUBLIC_ADDRESS"
         printf '\n'
     fi
     sleep 10
 done
 
-log "run time is over after $DURATION_MINUTES minutes"
+if [ "$REMAINING_AFTER" -gt 0 ]; then
+    log "session $SESSION_NUMBER of $SESSIONS is over; queueing the continuation run for the remaining $REMAINING_AFTER minutes"
+    env \
+        DURATION_MINUTES="$DURATION_MINUTES" \
+        ELAPSED_MINUTES="$((ELAPSED_MINUTES + SESSION_LENGTH))" \
+        SESSION_MINUTES="$SESSION_MINUTES" \
+        PUBLIC_PORT="$PUBLIC_PORT" \
+        MEMORY="$MEMORY" \
+        PAPER_VERSION="$PAPER_VERSION" \
+        MOBHEAD="$MOBHEAD" \
+        ONLINE_MODE="$ONLINE_MODE" \
+        SAVE_WORLD="$SAVE_WORLD" \
+        "$ROOT/scripts/dispatch-continuation.sh" \
+        || die "the continuation run could not be queued"
+    CONTINUING=1
+else
+    log "run time is over after $DURATION_MINUTES minutes"
+fi
