@@ -1,0 +1,24 @@
+# Runtime output: the world, the downloaded server, logs and caches.
+.cache/
+dist/
+
+server/paper.jar
+server/paper.jar.part
+server/paper.version
+server/world/
+server/world_nether/
+server/world_the_end/
+server/logs/
+server/cache/
+server/libraries/
+server/versions/
+server/plugins/
+server/banned-ips.json
+server/banned-players.json
+server/ops.json
+server/usercache.json
+server/whitelist.json
+server/*.log
+server/*.log.gz
+
+scripts/__pycache__/
