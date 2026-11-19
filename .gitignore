@@ -1,6 +1,7 @@
 # Runtime output: the world, the downloaded server, logs and caches.
 .cache/
 dist/
+run/
 
 server/paper.jar
 server/paper.jar.part

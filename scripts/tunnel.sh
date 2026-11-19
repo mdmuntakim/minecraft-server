@@ -6,9 +6,15 @@
 #   ./scripts/tunnel.sh
 #   ==> listening at bore.pub:41234
 #
-# Players then connect to bore.pub:41234.  For a stable, named address use a
-# playit.gg agent instead and keep this script for quick tests, or pass
-# BORE_SERVER / extra arguments to a self-hosted bore server.
+# Players then connect to bore.pub:41234.  Pass --address to ask the tunnel
+# server for a fixed public port, which keeps the game address stable between
+# runs (the port must be free):
+#
+#   ./scripts/tunnel.sh --address 25999
+#   ==> listening at bore.pub:25999
+#
+# For a stable, named address use a playit.gg agent instead and keep this
+# script for quick tests, or pass --to to a self-hosted bore server.
 #
 #   ./scripts/tunnel.sh --port 25565 --to bore.example.org
 #   ./scripts/tunnel.sh --secret my-shared-secret
@@ -17,12 +23,16 @@ cd "$(dirname "$0")"
 # shellcheck source=lib.sh
 source ./lib.sh
 
+PUBLIC_PORT="${PUBLIC_PORT:-}"
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        --port)   SERVER_PORT="${2:?--port needs a value}"; shift 2 ;;
-        --to)     BORE_SERVER="${2:?--to needs a value}"; shift 2 ;;
-        -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        *)        break ;;
+        --port)        SERVER_PORT="${2:?--port needs a value}"; shift 2 ;;
+        --address)     PUBLIC_PORT="${2:?--address needs a value}"; shift 2 ;;
+        --public-port) PUBLIC_PORT="${2:?--public-port needs a value}"; shift 2 ;;
+        --to)          BORE_SERVER="${2:?--to needs a value}"; shift 2 ;;
+        -h|--help)     sed -n '2,20p' "$ROOT/scripts/tunnel.sh" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *)             break ;;
     esac
 done
 
@@ -56,5 +66,7 @@ if [ ! -x "$bin" ]; then
     chmod +x "$bin"
 fi
 
+args=(local "$SERVER_PORT" --to "$BORE_SERVER")
+[ -n "$PUBLIC_PORT" ] && args+=(--port "$PUBLIC_PORT")
 log "tunneling 127.0.0.1:$SERVER_PORT to $BORE_SERVER (bore $BORE_VERSION)"
-exec "$bin" local "$SERVER_PORT" --to "$BORE_SERVER" "$@"
+exec "$bin" "${args[@]}" "$@"
