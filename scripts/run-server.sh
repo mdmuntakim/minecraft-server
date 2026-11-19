@@ -97,7 +97,7 @@ if [ "${GITHUB_ACTIONS:-}" = true ]; then
 fi
 
 read -r SESSION_LENGTH REMAINING_AFTER <<<"$(plan_session "$DURATION_MINUTES" "$ELAPSED_MINUTES" "$SESSION_MINUTES")"
-SESSIONS=$(( (DURATION_MINUTES - ELAPSED_MINUTES + SESSION_LENGTH - 1) / SESSION_LENGTH ))
+SESSIONS=$(( (DURATION_MINUTES + SESSION_MINUTES - 1) / SESSION_MINUTES ))
 SESSION_NUMBER=$(( ELAPSED_MINUTES / SESSION_LENGTH + 1 ))
 if [ "$REMAINING_AFTER" -gt 0 ] && [ "$SAVE_WORLD" != 1 ]; then
     die "a run longer than one session needs SAVE_WORLD=1 so the next session can restore the world"
