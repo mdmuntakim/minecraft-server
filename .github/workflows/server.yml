@@ -19,6 +19,10 @@ on:
         description: 'Fixed bore.pub port, e.g. 25565 (empty = random)'
         required: false
         default: '25565'
+      fallback_port:
+        description: 'Second fixed bore.pub port when public_port is taken'
+        required: false
+        default: '25999'
       memory:
         description: 'Java heap for the server'
         required: true
@@ -99,6 +103,7 @@ jobs:
           ELAPSED_MINUTES: ${{ inputs.elapsed_minutes }}
           SESSION_MINUTES: ${{ inputs.session_minutes }}
           PUBLIC_PORT: ${{ inputs.public_port }}
+          PUBLIC_PORT_FALLBACK: ${{ inputs.fallback_port }}
           MEMORY: ${{ inputs.memory }}
           PAPER_VERSION: ${{ inputs.paper_version }}
           MOBHEAD: ${{ inputs.mobhead && '1' || '0' }}

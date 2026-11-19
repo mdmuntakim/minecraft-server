@@ -53,6 +53,7 @@ inputs = {
     "elapsed_minutes": os.environ["ELAPSED_MINUTES"],
     "previous_run": os.environ.get("GITHUB_RUN_ID", ""),
     "public_port": os.environ.get("PUBLIC_PORT", ""),
+    "fallback_port": os.environ.get("PUBLIC_PORT_FALLBACK", ""),
     "memory": os.environ.get("MEMORY", "2G"),
     "paper_version": os.environ.get("PAPER_VERSION", "26.3"),
     "mobhead": "true" if os.environ.get("MOBHEAD", "1") == "1" else "false",

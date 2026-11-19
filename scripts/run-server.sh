@@ -19,6 +19,7 @@
 #   SESSION_MINUTES   longest single job (default 320 on GitHub, no split
 #                     locally; a GitHub session must stay at or below 330)
 #   PUBLIC_PORT       fixed public port to request from bore.pub (default any)
+#   PUBLIC_PORT_FALLBACK  second fixed port to try when PUBLIC_PORT is taken
 #   SAVE_WORLD        1 upload the world for the continuation run (default 1)
 #   MEMORY            Java heap (default 2G)
 #   SERVER_PORT       local port (default 25565, a free port is used if taken)
@@ -46,6 +47,7 @@ if [ -z "${SESSION_MINUTES:-}" ]; then
     fi
 fi
 PUBLIC_PORT="${PUBLIC_PORT:-}"
+PUBLIC_PORT_FALLBACK="${PUBLIC_PORT_FALLBACK:-}"
 MEMORY="${MEMORY:-2G}"
 MOBHEAD="${MOBHEAD:-1}"
 ONLINE_MODE="${ONLINE_MODE:-true}"
@@ -62,6 +64,7 @@ while [ $# -gt 0 ]; do
         --elapsed)     ELAPSED_MINUTES="${2:?--elapsed needs a value}"; shift 2 ;;
         --session)     SESSION_MINUTES="${2:?--session needs a value}"; shift 2 ;;
         --public-port) PUBLIC_PORT="${2:?--public-port needs a value}"; shift 2 ;;
+        --fallback-port) PUBLIC_PORT_FALLBACK="${2:?--fallback-port needs a value}"; shift 2 ;;
         --memory)      MEMORY="${2:?--memory needs a value}"; shift 2 ;;
         --no-tunnel)   TUNNEL=0; shift ;;
         --summary)     SUMMARY_FILE="${2:?--summary needs a value}"; shift 2 ;;
@@ -284,9 +287,15 @@ log "server is up (local port $SERVER_PORT)"
 
 # --- tunnel ----------------------------------------------------------------
 start_tunnel() {
+    # $1 is the fixed public port to request, empty for a random one.
+    stop_tunnel
     : >"$TUNNEL_LOG"
-    "$ROOT/scripts/tunnel.sh" --port "$SERVER_PORT" ${1:+--address "$1"} \
-        >>"$TUNNEL_LOG" 2>&1 &
+    PUBLIC_ADDRESS=""
+    # Clear the inherited PUBLIC_PORT so tunnel.sh only requests the port
+    # given here; otherwise a failed fixed-port attempt would be repeated
+    # instead of falling back.
+    PUBLIC_PORT= "$ROOT/scripts/tunnel.sh" --port "$SERVER_PORT" \
+        ${1:+--address "$1"} >>"$TUNNEL_LOG" 2>&1 &
     TUNNEL_PID=$!
     for _ in $(seq 1 120); do
         PUBLIC_ADDRESS="$(sed 's/\x1b\[[0-9;]*m//g' "$TUNNEL_LOG" 2>/dev/null \
@@ -298,26 +307,33 @@ start_tunnel() {
     return 1
 }
 
-if [ "$TUNNEL" = 1 ]; then
+open_public_tunnel() {
     PUBLIC_ADDRESS=""
-    if [ -n "$PUBLIC_PORT" ]; then
-        log "opening the public tunnel, requesting port $PUBLIC_PORT"
-        start_tunnel "$PUBLIC_PORT" || true
-        if [ -z "$PUBLIC_ADDRESS" ]; then
-            warn "public port $PUBLIC_PORT is not available, using a random port"
-        fi
-    else
-        log "opening the public tunnel"
-    fi
+    for candidate in "$PUBLIC_PORT" "$PUBLIC_PORT_FALLBACK"; do
+        [ -n "$candidate" ] || continue
+        log "opening the public tunnel, requesting port $candidate"
+        start_tunnel "$candidate" || true
+        [ -n "$PUBLIC_ADDRESS" ] && break
+        warn "public port $candidate is not available"
+    done
     if [ -z "$PUBLIC_ADDRESS" ]; then
-        stop_tunnel
-        start_tunnel "" || die "the tunnel did not report a public address"
+        if [ -n "$PUBLIC_PORT$PUBLIC_PORT_FALLBACK" ]; then
+            warn "no requested port is available, using a random port"
+        else
+            log "opening the public tunnel"
+        fi
+        start_tunnel "" || return 1
     fi
-
     ADDRESS_HOST="${PUBLIC_ADDRESS%:*}"
     ADDRESS_PORT="${PUBLIC_ADDRESS##*:}"
-    log "public address: $PUBLIC_ADDRESS"
     printf '%s\n' "$PUBLIC_ADDRESS" >"$ADDRESS_FILE"
+    return 0
+}
+
+if [ "$TUNNEL" = 1 ]; then
+    open_public_tunnel || die "the tunnel did not report a public address"
+
+    log "public address: $PUBLIC_ADDRESS"
 
     for attempt in 1 2 3 4 5; do
         if python3 "$ROOT/scripts/ping.py" "$ADDRESS_HOST" "$ADDRESS_PORT" --timeout 20; then
@@ -351,17 +367,7 @@ while :; do
         TUNNEL_RESTARTS=$((TUNNEL_RESTARTS + 1))
         [ "$TUNNEL_RESTARTS" -le 2 ] || die "the tunnel keeps stopping"
         warn "the tunnel stopped, reopening it ($TUNNEL_RESTARTS/2)"
-        PUBLIC_ADDRESS=""
-        if [ -n "$PUBLIC_PORT" ]; then
-            start_tunnel "$PUBLIC_PORT" || true
-        fi
-        if [ -z "$PUBLIC_ADDRESS" ]; then
-            stop_tunnel
-            start_tunnel "" || die "could not reopen the tunnel"
-        fi
-        ADDRESS_HOST="${PUBLIC_ADDRESS%:*}"
-        ADDRESS_PORT="${PUBLIC_ADDRESS##*:}"
-        printf '%s\n' "$PUBLIC_ADDRESS" >"$ADDRESS_FILE"
+        open_public_tunnel || die "could not reopen the tunnel"
         log "new public address: $PUBLIC_ADDRESS"
     fi
     if [ $((NOW - LAST_STATUS)) -ge 60 ]; then
@@ -380,6 +386,7 @@ if [ "$REMAINING_AFTER" -gt 0 ]; then
         ELAPSED_MINUTES="$((ELAPSED_MINUTES + SESSION_LENGTH))" \
         SESSION_MINUTES="$SESSION_MINUTES" \
         PUBLIC_PORT="$PUBLIC_PORT" \
+        PUBLIC_PORT_FALLBACK="$PUBLIC_PORT_FALLBACK" \
         MEMORY="$MEMORY" \
         PAPER_VERSION="$PAPER_VERSION" \
         MOBHEAD="$MOBHEAD" \

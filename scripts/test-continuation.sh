@@ -28,6 +28,7 @@ payload="$(
     DURATION_MINUTES=360 \
     ELAPSED_MINUTES=320 \
     PUBLIC_PORT=25565 \
+    PUBLIC_PORT_FALLBACK=25999 \
     MEMORY=2G \
     PAPER_VERSION=26.3 \
     MOBHEAD=1 \
@@ -48,6 +49,8 @@ check "continuation world source" "123456789" \
     "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["inputs"]["previous_run"])' "$payload")"
 check "continuation keeps the public port" "25565" \
     "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["inputs"]["public_port"])' "$payload")"
+check "continuation keeps the fallback port" "25999" \
+    "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["inputs"]["fallback_port"])' "$payload")"
 check "continuation keeps MobHead" "true" \
     "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["inputs"]["mobhead"])' "$payload")"
 
